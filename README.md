@@ -80,21 +80,26 @@ sensitivity, spur-free dynamic range, and each stage's share of the noise.
 - **Friis in one click.** Compare the *LNA at the antenna* and *Cable before the LNA* chains. They
   use the same three parts, but the noise figure goes from 1.76 dB to 7.18 dB.
 
-Every control is stored in the URL, so **Copy link** shares an exact configuration.
+Every control, including an edited receiver chain, is stored in the URL, so **Copy link** shares an
+exact configuration.
 
 ## Verified maths
 
 All maths lives in [`js/array.js`](js/array.js) and [`js/rf.js`](js/rf.js), which are pure
-functions with no DOM. `node --test` checks them:
+functions with no DOM. `node --test` checks them with the same functions and settings the page uses:
 
 | Check | Reference |
 | --- | --- |
 | Uniform array: nulls at sin θ = k/Nd, HPBW → 0.886/Nd, first sidelobe −13.26 dB | closed form |
 | Dolph–Chebyshev and Taylor weights | `scipy.signal.windows` to 10⁻⁷ |
 | Chebyshev sidelobes all at the design level | within 0.05 dB |
-| Directivity integrator, linear and planar | closed form, e.g. D = N at λ/2 spacing, within 0.05 dB |
+| Linear-array directivity: the azimuth integral is done exactly, Simpson's rule in u | closed form within 0.01 dB, also for 64 elements at d = λ and 1.5λ |
+| Element patterns in 3-D: a single λ/2 dipole, a single cosine element | 2.15 dBi and 10 log₁₀ 6; dipole arrays match a brute-force sphere integral |
+| Planar-array directivity, in closed form | brute-force sphere integral within 0.01 dB |
 | Cosine elements turn the fan beam into a pencil beam | +6.02 dB (10 log₁₀ 4) |
-| Steering accuracy, grating-lobe positions, quantisation lobes | analytic |
+| Steering accuracy, grating-lobe positions (including endfire), quantisation lobes | analytic |
+| Planar grating lobes: replicas of the beam that land inside the visible disk | brute-force search of the 2-D pattern |
+| Share links keep an edited receiver chain | edit → share → reopen round trip, up to the editor's 24 stages and 40-character names |
 | Free-space loss 100.05 dB at 2.4 GHz over 1 km; kTB = −174 dBm/Hz | standard values |
 | Two-ray model tends to 40 log d − 20 log(hₜhᵣ) beyond the breakpoint | analytic |
 | Friis noise and IIP3 cascades | hand-computed example |
@@ -104,7 +109,7 @@ functions with no DOM. `node --test` checks them:
 ```bash
 git clone https://github.com/Dy07077/beamlab && cd beamlab
 python3 -m http.server 8000      # then open http://localhost:8000
-node --test test/*.test.mjs      # 22 tests; no npm install needed
+node --test test/*.test.mjs      # 33 tests; no npm install needed
 ```
 
 The page uses ES modules, so open it over `http://`. Opening `index.html` straight from disk will
@@ -116,6 +121,7 @@ not work. Add `?t=0.5` to the URL to freeze the wave animation, which helps with
 index.html, css/style.css   the page
 js/array.js                  tapers, steering, array factor, beam metrics, directivity
 js/rf.js                     path-loss models, thermal noise, noise and IP3 cascades
+js/share.js                  receiver chains in share links
 js/plot.js                   canvas line, polar and heat-map plots (HiDPI aware)
 js/app.js                    controls, URL state, wave-field animation
 test/                        node:test suites for the maths

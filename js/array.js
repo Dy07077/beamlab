@@ -93,16 +93,31 @@ export const TAPERS = {
 };
 
 // ------------------------------------------------------------ elements
+/** |E|^2 of a half-wave dipole at direction cosine u measured along its own axis. */
+function dipole2(u) {
+  const s2 = 1 - u * u;
+  return s2 < 1e-12 ? 0 : Math.cos((Math.PI / 2) * u) ** 2 / s2;
+}
+
+// Each element pattern comes in three forms. f(t) is the amplitude in the plotted plane (x-z, angle t
+// from broadside). For the directivity integral a direction is written as u = cos(angle from the
+// array axis x) plus an azimuth a around that axis (a = 90° points along z): peak(u) is the largest
+// |E|^2 on the cone of constant u, and ring(u) is the integral of |E|^2 over a full turn in a.
 export const ELEMENTS = {
-  isotropic: { label: "Isotropic", f: () => 1 },
-  cosine: { label: "Cosine (patch-like)", f: (t) => Math.max(Math.cos(t), 0) },
+  isotropic: { label: "Isotropic", f: () => 1, peak: () => 1, ring: () => 2 * Math.PI },
+  cosine: {
+    // |E| = cos(angle from z) in the front half-space; on the cone that is sqrt(1 - u^2) sin(a)
+    label: "Cosine (patch-like)",
+    f: (t) => Math.max(Math.cos(t), 0),
+    peak: (u) => 1 - u * u,
+    ring: (u) => (Math.PI / 2) * (1 - u * u),
+  },
   dipole: {
-    // half-wave dipole lying along the array axis: angle from its axis is 90° - theta
+    // half-wave dipole lying along the array axis: the same pattern at every azimuth; u = sin t in the plot
     label: "λ/2 dipole along the array",
-    f: (t) => {
-      const c = Math.cos(t);
-      return Math.abs(c) < 1e-9 ? 0 : Math.abs(Math.cos((Math.PI / 2) * Math.sin(t)) / c);
-    },
+    f: (t) => Math.sqrt(dipole2(Math.sin(t))),
+    peak: dipole2,
+    ring: (u) => 2 * Math.PI * dipole2(u),
   },
 };
 
@@ -199,17 +214,13 @@ export function beamMetrics(theta, db, steer = null) {
   while (b < n - 1 && db[b + 1] <= db[b]) b++;
   let sll = -Infinity;
   const lobes = [];
-  for (let i = 1; i < n - 1; i++) {
+  // a lobe cut off by the edge of the visible region (e.g. an endfire grating lobe) still counts
+  for (let i = 0; i < n; i++) {
     if (i >= a && i <= b) continue;
-    if (db[i] >= db[i - 1] && db[i] >= db[i + 1]) {
+    if ((i === 0 || db[i] >= db[i - 1]) && (i === n - 1 || db[i] >= db[i + 1])) {
       sll = Math.max(sll, db[i]);
       if (db[i] > -3) lobes.push(theta[i]);
     }
-  }
-  if (a === 0 || b === n - 1) {
-    // main lobe touches the edge of the visible region: check edges for sidelobes too
-    if (a !== 0) sll = Math.max(sll, db[0]);
-    if (b !== n - 1) sll = Math.max(sll, db[n - 1]);
   }
   return {
     peak: theta[ip],
@@ -221,44 +232,53 @@ export function beamMetrics(theta, db, steer = null) {
 }
 
 /**
- * Directivity (linear) of the array with element pattern f(angle from broadside),
- * by numerical integration over the sphere. Elements lie on x, broadside is z.
+ * Directivity (linear) of the array with an element pattern from ELEMENTS. Elements lie on x.
+ * |AF|^2 depends only on u = cos(angle from the array axis), so the azimuth integral is the
+ * element's ring(u) and the sphere integral reduces to the 1-D integral of |AF(u)|^2 ring(u) over
+ * [-1, 1]. Simpson's rule with about 16 samples per sidelobe keeps long, sparse arrays accurate.
  */
-export function directivity(w, ph, d, element = ELEMENTS.isotropic.f, nTheta = 180, nPhi = 360, nU = 2001) {
-  // |AF|^2 depends only on u = sin(polar) cos(phi); tabulate it once
-  const table = new Float64Array(nU);
-  for (let i = 0; i < nU; i++) {
-    const m = afMag(w, ph, d, -1 + (2 * i) / (nU - 1));
-    table[i] = m * m;
-  }
-  const af2 = (u) => {
-    const x = ((u + 1) / 2) * (nU - 1);
-    const i = Math.min(nU - 2, Math.max(0, Math.floor(x)));
-    const f = x - i;
-    return table[i] * (1 - f) + table[i + 1] * f;
-  };
+export function directivity(w, ph, d, element = ELEMENTS.isotropic) {
+  const m = 2 * Math.max(1000, Math.ceil(16 * d * w.length)); // even number of intervals
+  const h = 2 / m;
+  const power = (u) => afMag(w, ph, d, u) ** 2 * element.peak(u);
   let integral = 0;
-  let peak = 0;
-  const dT = Math.PI / nTheta;
-  const dP = (2 * Math.PI) / nPhi;
-  for (let i = 0; i < nTheta; i++) {
-    const th = (i + 0.5) * dT; // polar angle from broadside (z)
-    const st = Math.sin(th);
-    const e = element(th) ** 2;
-    if (e === 0) continue;
-    for (let j = 0; j < nPhi; j++) {
-      const p = af2(st * Math.cos((j + 0.5) * dP)) * e;
-      integral += p * st * dT * dP;
-      if (p > peak) peak = p;
+  let best = -1;
+  let ib = 0;
+  for (let i = 0; i <= m; i++) {
+    const u = -1 + i * h;
+    const a2 = afMag(w, ph, d, u) ** 2;
+    integral += (i === 0 || i === m ? 1 : i % 2 ? 4 : 2) * a2 * element.ring(u);
+    const p = a2 * element.peak(u);
+    if (p > best) {
+      best = p;
+      ib = i;
     }
   }
-  // refine the peak along the principal cut (phi = 0 and pi)
-  for (let k = 0; k <= 3600; k++) {
-    const th = (-90 + k / 20) * DEG;
-    const p = af2(Math.sin(th)) * element(Math.abs(th)) ** 2;
-    if (p > peak) peak = p;
+  integral *= h / 3;
+  // golden-section search for the true peak between the neighbouring samples
+  const g = (Math.sqrt(5) - 1) / 2;
+  let a = Math.max(-1, -1 + (ib - 1) * h);
+  let b = Math.min(1, -1 + (ib + 1) * h);
+  let x1 = b - g * (b - a);
+  let x2 = a + g * (b - a);
+  let f1 = power(x1);
+  let f2 = power(x2);
+  for (let k = 0; k < 40; k++) {
+    if (f1 > f2) {
+      b = x2;
+      x2 = x1;
+      f2 = f1;
+      x1 = b - g * (b - a);
+      f1 = power(x1);
+    } else {
+      a = x1;
+      x1 = x2;
+      f1 = f2;
+      x2 = a + g * (b - a);
+      f2 = power(x2);
+    }
   }
-  return (4 * Math.PI * peak) / integral;
+  return (4 * Math.PI * Math.max(best, f1, f2)) / integral;
 }
 
 /** Exact directivity of a linear array of isotropic elements (closed form, used to test the integrator). */
@@ -329,31 +349,58 @@ export function planarGrid(wx, wy, dx, dy, theta0, phi0, n = 181) {
   return { grid: out, n, u0, v0 };
 }
 
-/** Directivity (linear) of a separable rectangular array of isotropic elements, numerically. */
-export function planarDirectivity(wx, wy, dx, dy, theta0, phi0, nTheta = 120, nPhi = 240, nU = 1601) {
+/**
+ * Grating lobes of a rectangular lattice steered to (u0, v0): the replicas of the main beam at
+ * (u0 - p / dx, v0 - q / dy) that land inside the visible disk u^2 + v^2 <= 1 (the rim counts,
+ * as an endfire lobe does). Checking each axis on its own is not enough: a replica can clear the
+ * line |u| = 1 and still lie outside the disk.
+ */
+export function planarGratingLobes(dx, dy, u0, v0) {
+  const out = [];
+  const P = Math.ceil(2 * dx);
+  const Q = Math.ceil(2 * dy); // |u0 - p / dx| <= 1 needs |p| <= 2 dx
+  for (let p = -P; p <= P; p++) {
+    for (let q = -Q; q <= Q; q++) {
+      if (p === 0 && q === 0) continue;
+      const u = u0 - p / dx;
+      const v = v0 - q / dy;
+      if (u * u + v * v <= 1 + 1e-12) out.push([u, v]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Directivity (linear) of a separable rectangular array of isotropic elements, in closed form:
+ * the radiated power is 4 pi sum_mn a_m a_n cos(phi_m - phi_n) sinc(k |r_m - r_n|), summed here
+ * over element-pair offsets with the autocorrelation of each axis's excitation.
+ */
+export function planarDirectivity(wx, wy, dx, dy, theta0, phi0) {
   const u0 = Math.sin(theta0) * Math.cos(phi0);
   const v0 = Math.sin(theta0) * Math.sin(phi0);
   const phx = steeringPhases(wx.length, dx, Math.asin(u0));
   const phy = steeringPhases(wy.length, dy, Math.asin(v0));
-  const tab = (w, ph, d) => Float64Array.from({ length: nU }, (_, i) => afMag(w, ph, d, -1 + (2 * i) / (nU - 1)) ** 2);
-  const tx = tab(wx, phx, dx);
-  const ty = tab(wy, phy, dy);
-  const at = (t, u) => {
-    const x = ((u + 1) / 2) * (nU - 1);
-    const i = Math.min(nU - 2, Math.max(0, Math.floor(x)));
-    const f = x - i;
-    return t[i] * (1 - f) + t[i + 1] * f;
+  const corr = (w, ph) => {
+    const N = w.length;
+    const out = [];
+    for (let s = 1 - N; s < N; s++) {
+      let re = 0;
+      let im = 0;
+      for (let m = Math.max(0, -s); m < Math.min(N, N - s); m++) {
+        re += w[m + s] * w[m] * Math.cos(ph[m + s] - ph[m]);
+        im += w[m + s] * w[m] * Math.sin(ph[m + s] - ph[m]);
+      }
+      out.push([s, re, im]);
+    }
+    return out;
   };
+  const cy = corr(wy, phy);
   let integral = 0;
-  const dT = Math.PI / nTheta;
-  const dP = (2 * Math.PI) / nPhi;
-  for (let i = 0; i < nTheta; i++) {
-    const th = (i + 0.5) * dT;
-    const st = Math.sin(th);
-    for (let j = 0; j < nPhi; j++) {
-      const ph = (j + 0.5) * dP;
-      integral += at(tx, st * Math.cos(ph)) * at(ty, st * Math.sin(ph)) * st * dT * dP;
+  for (const [sx, ax, bx] of corr(wx, phx)) {
+    for (const [sy, ay, by] of cy) {
+      const r = 2 * Math.PI * Math.hypot(dx * sx, dy * sy);
+      integral += (ax * ay - bx * by) * (r === 0 ? 1 : Math.sin(r) / r);
     }
   }
-  return (4 * Math.PI * afMag(wx, phx, dx, u0) ** 2 * afMag(wy, phy, dy, v0) ** 2) / integral;
+  return (afMag(wx, phx, dx, u0) ** 2 * afMag(wy, phy, dy, v0) ** 2) / integral;
 }

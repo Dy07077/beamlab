@@ -1,9 +1,10 @@
 import {
   DEG, TAPERS, ELEMENTS, steeringPhases, afMag, pattern, beamMetrics, directivity, taperEfficiency,
-  gratingFreeScan, failedElements, planarGrid, planarDirectivity,
+  gratingFreeScan, failedElements, planarGrid, planarDirectivity, planarGratingLobes,
 } from "./array.js";
 import { C0, fspl, twoRay, breakpoint, logDistance, thermalNoise, cascade, sensitivity, sfdr, received } from "./rf.js";
 import { C, fit, linePlot, polarPlot, heatmap, fmtNum } from "./plot.js";
+import { encodeStages, decodeStages, MAX_STAGES, MAX_NAME } from "./share.js";
 
 const $ = (s) => document.querySelector(s);
 const db20 = (x) => 20 * Math.log10(Math.max(x, 1e-12));
@@ -368,14 +369,14 @@ function renderArray() {
   const failed = failedElements(s.N, s.fail / 100, 7);
   const w = TAPERS[s.taper].weights(s.N, s.sll, s.nbar).map((x, i) => (failed.has(i) ? 0 : x));
   const ph = steeringPhases(s.N, s.d, t0, s.bits);
-  const el = ELEMENTS[s.element].f;
-  const pat = pattern(w, ph, s.d, el, 1441);
+  const el = ELEMENTS[s.element];
+  const pat = pattern(w, ph, s.d, el.f, 1441);
   const uni = new Array(s.N).fill(1);
   const ideal = steeringPhases(s.N, s.d, t0);
-  const ref = pattern(uni, ideal, s.d, el, 721);
+  const ref = pattern(uni, ideal, s.d, el.f, 721);
   const m = beamMetrics(pat.theta, pat.totalDb, t0);
-  const D = directivity(w, ph, s.d, el, 90, 180);
-  const Dref = directivity(uni, ideal, s.d, el, 90, 180);
+  const D = directivity(w, ph, s.d, el);
+  const Dref = directivity(uni, ideal, s.d, el);
   const lamCm = (C0 / (s.freq * 1e9)) * 100;
   const limit = gratingFreeScan(s.d);
   const gl = m.gratingLobes.length > 0;
@@ -463,15 +464,14 @@ function renderPlanar() {
   };
   const bwU = halfWidth(du, u0);
   const bwV = halfWidth(dv, v0);
-  const D = planarDirectivity(wx, wy, s.dx, s.dy, t0, p0, 90, 180, 1201);
-  const glx = s.dx > 1 / (1 + Math.abs(u0));
-  const gly = s.dy > 1 / (1 + Math.abs(v0));
+  const D = planarDirectivity(wx, wy, s.dx, s.dy, t0, p0);
+  const gl = planarGratingLobes(s.dx, s.dy, u0, v0).length;
   metricCards($("#planar-metrics"), [
     { k: "Elements", v: `${s.Nx * s.Ny}`, s: `${s.Nx} × ${s.Ny}` },
     { k: "Directivity", v: `${(10 * Math.log10(D)).toFixed(1)} dBi`, s: "isotropic elements" },
     { k: "Beamwidth in u", v: bwU ? `${(deg(2 * Math.asin(bwU / 2))).toFixed(2)}°` : "—", s: "−3 dB, sine space" },
     { k: "Beamwidth in v", v: bwV ? `${(deg(2 * Math.asin(bwV / 2))).toFixed(2)}°` : "—", s: "−3 dB, sine space" },
-    { k: "Grating lobes", v: glx || gly ? "yes" : "none", s: glx || gly ? "reduce spacing or scan" : "inside the visible disk", cls: glx || gly ? "bad" : "good" },
+    { k: "Grating lobes", v: gl ? `${gl} in view` : "none", s: gl ? "reduce spacing or scan" : "none inside the visible disk", cls: gl ? "bad" : "good" },
   ]);
 }
 
@@ -560,6 +560,9 @@ function renderLink() {
 function buildStages() {
   const table = $("#stages");
   table.replaceChildren();
+  const add = $("#add-stage");
+  add.disabled = stages.length >= MAX_STAGES;
+  add.title = add.disabled ? `A shared link holds at most ${MAX_STAGES} stages` : "";
   const head = table.insertRow();
   for (const t of ["#", "Stage", "Gain (dB)", "NF (dB)", "IIP3 (dBm)", ""]) {
     const th = document.createElement("th");
@@ -577,6 +580,7 @@ function buildStages() {
       input.type = key === "name" ? "text" : "number";
       if (key !== "name") input.step = "0.1";
       input.className = key === "name" ? "name" : "";
+      if (key === "name") input.maxLength = MAX_NAME;
       input.value = st[key];
       input.setAttribute("aria-label", `${key} of stage ${i + 1}`);
       input.addEventListener("input", () => {
@@ -675,6 +679,11 @@ function schedule() {
 function writeHash() {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(state[active])) p.set(k, typeof v === "number" ? String(+v.toPrecision(6)) : v);
+  if (active === "rx") {
+    // an edited chain travels in full; an untouched preset needs only its name
+    const chain = encodeStages(stages);
+    if (chain !== encodeStages(RX_PRESETS[state.rx.preset].stages)) p.set("stages", chain);
+  }
   history.replaceState(null, "", `#${active}?${p}`);
 }
 
@@ -682,7 +691,8 @@ function readHash() {
   const m = location.hash.match(/^#(\w+)(?:\?(.*))?$/);
   if (!m || !(m[1] in state)) return;
   active = m[1];
-  for (const [k, raw] of new URLSearchParams(m[2] ?? "")) {
+  const params = new URLSearchParams(m[2] ?? "");
+  for (const [k, raw] of params) {
     const spec = SPECS[active].find((x) => x.key === k);
     if (!spec) continue;
     if (spec.options) {
@@ -694,7 +704,10 @@ function readHash() {
       if (sv >= spec.min - 1e-9 && sv <= spec.max + 1e-9) state[active][k] = v;
     }
   }
-  if (active === "rx") stages = JSON.parse(JSON.stringify(RX_PRESETS[state.rx.preset].stages));
+  if (active === "rx") {
+    const custom = params.has("stages") ? decodeStages(params.get("stages")) : null;
+    stages = custom ?? JSON.parse(JSON.stringify(RX_PRESETS[state.rx.preset].stages));
+  }
 }
 
 function showTab(name) {
@@ -713,6 +726,7 @@ function init() {
   Field.canvas = $("#field");
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
   $("#add-stage").addEventListener("click", () => {
+    if (stages.length >= MAX_STAGES) return;
     stages.push({ name: `Stage ${stages.length + 1}`, gain: 10, nf: 3, iip3: 10 });
     buildStages();
     schedule();

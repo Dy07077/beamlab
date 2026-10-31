@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>beamlab · phased arrays & RF links</title>
+  <meta name="description" content="Interactive phased-array beamforming and RF link-budget lab that runs entirely in the browser.">
+  <meta name="theme-color" content="#0d1117">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cg fill='none' stroke='%2358a6ff' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M9 22a10 10 0 0 1 14 0'/%3E%3Cpath d='M5 18a16 16 0 0 1 22 0' opacity='.6'/%3E%3C/g%3E%3Cg fill='%23ffa657'%3E%3Ccircle cx='8' cy='26' r='1.6'/%3E%3Ccircle cx='13' cy='26' r='1.6'/%3E%3Ccircle cx='19' cy='26' r='1.6'/%3E%3Ccircle cx='24' cy='26' r='1.6'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#161b22" stroke="#30363d"/>
+        <g fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round">
+          <path d="M9 21a10 10 0 0 1 14 0"/><path d="M5 17a16 16 0 0 1 22 0" opacity=".55"/>
+        </g>
+        <g fill="#ffa657"><circle cx="8" cy="25" r="1.6"/><circle cx="13" cy="25" r="1.6"/><circle cx="19" cy="25" r="1.6"/><circle cx="24" cy="25" r="1.6"/></g>
+      </svg>
+      <div>
+        <h1>beamlab</h1>
+        <p>phased arrays &amp; RF links, in your browser</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Lab sections">
+      <button role="tab" data-tab="array" aria-selected="true">Linear array</button>
+      <button role="tab" data-tab="planar" aria-selected="false">Planar array</button>
+      <button role="tab" data-tab="link" aria-selected="false">Link budget</button>
+      <button role="tab" data-tab="rx" aria-selected="false">Receiver chain</button>
+    </nav>
+    <button class="share" id="share" title="Copy a link to this exact configuration">Copy link</button>
+  </header>
+
+  <main>
+    <section class="tab" id="tab-array" role="tabpanel">
+      <aside class="panel controls">
+        <div class="presets" id="array-presets"></div>
+        <div id="array-controls"></div>
+      </aside>
+      <div class="views">
+        <div class="card span2 field-card">
+          <div class="card-h"><h2>Wave field</h2><span class="hint">instantaneous field of the array, wavelength grid</span></div>
+          <canvas id="field" class="tall"></canvas>
+        </div>
+        <div class="metrics span2" id="array-metrics"></div>
+        <div class="card">
+          <div class="card-h"><h2>Radiation pattern</h2><span class="hint">dashed: uniform, ideal phases</span></div>
+          <canvas id="polar"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Pattern in dB</h2><span class="hint">array factor × element pattern</span></div>
+          <canvas id="cart"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Element excitation</h2><span class="hint">bars: amplitude · dots: phase</span></div>
+          <canvas id="weights"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Visible region</h2><span class="hint">array factor vs u = sin θ</span></div>
+          <canvas id="uspace"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-planar" role="tabpanel" hidden>
+      <aside class="panel controls"><div id="planar-controls"></div></aside>
+      <div class="views">
+        <div class="metrics span2" id="planar-metrics"></div>
+        <div class="card">
+          <div class="card-h"><h2>Beam in sine space</h2><span class="hint">|AF|² in dB over the visible disk</span></div>
+          <canvas id="uv" class="square"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Principal cuts</h2><span class="hint">through the beam peak</span></div>
+          <canvas id="cuts" class="square"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-link" role="tabpanel" hidden>
+      <aside class="panel controls"><div id="link-controls"></div></aside>
+      <div class="views">
+        <div class="metrics span2" id="link-metrics"></div>
+        <div class="card span2">
+          <div class="card-h"><h2>Received power vs distance</h2><span class="hint">the link closes where the curve is above the sensitivity line</span></div>
+          <canvas id="linkplot" class="tall"></canvas>
+        </div>
+        <div class="card span2">
+          <div class="card-h"><h2>Budget</h2></div>
+          <div id="budget" class="budget"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-rx" role="tabpanel" hidden>
+      <aside class="panel controls"><div id="rx-controls"></div></aside>
+      <div class="views">
+        <div class="metrics span2" id="rx-metrics"></div>
+        <div class="card span2">
+          <div class="card-h"><h2>Stages</h2><span class="hint">edit any value; order matters (Friis)</span></div>
+          <div class="table-wrap"><table class="stages" id="stages"></table></div>
+          <button class="add" id="add-stage">+ Add stage</button>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Cumulative gain and noise figure</h2></div>
+          <canvas id="rxplot"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Who adds the noise?</h2><span class="hint">share of the total excess noise factor</span></div>
+          <canvas id="rxshare"></canvas>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>beamlab · made by <a href="https://github.com/Dy07077">Ding Yuan</a> · <a href="https://github.com/Dy07077/beamlab">source</a> · MIT</span>
+    <span class="muted">All maths runs locally in your browser; nothing is sent anywhere.</span>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

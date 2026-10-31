@@ -1,0 +1,18 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Maths tests
+        run: node --test test/*.test.mjs
+      - name: Syntax check of the app
+        run: for f in js/*.js; do node --check "$f"; done

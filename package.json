@@ -1,0 +1,12 @@
+{
+  "name": "beamlab",
+  "version": "1.0.0",
+  "description": "Interactive phased-array and RF link-budget lab that runs in the browser",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
